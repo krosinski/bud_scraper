@@ -2,12 +2,13 @@ import re
 import codecs
 import logging
 import json
+import threading
 from collections import OrderedDict
 
 import BeautifulSoup as bs
 import requests
 
-logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger().setLevel(logging.INFO)
 
 class EndOfDataException(Exception):
     pass
@@ -37,10 +38,27 @@ class BudScraper(object):
     def __init__(self, search_keyword):
         self._keyword = search_keyword
         self._results = []
+        self._pool = []
 
-    def fetch_data(self):
-        i = 1
+    def fetch_data(self, num_pages=1, num_threads=1):
+        num_threads = min(num_threads, num_pages)
+        self._pool = []
+        for i in xrange(num_threads):
+            self._pool.append(threading.Thread(target=self._fetch_data,
+                                               args=(num_pages, i+1)))
+
+        for th in self._pool:
+            th.start()
+            
+        for th in self._pool:
+            th.join()
+
+
+    def _fetch_data(self, max_page=1, index_inc=1):
+        i = index_inc
         while True:
+            if max_page and i > max_page:
+                break
             url = self.URL_PATTERN % {
                 "keyword": self._keyword,
                 "page_num": i,
@@ -48,9 +66,10 @@ class BudScraper(object):
             res = requests.get(url)
             if res:
                 try:
-                    logging.info("Parsing page %s", i)
+                    logging.info("Parsing page %s", url)
                     self._parse_page(res.content)
                     logging.info("Entries after page: %s", len(self._results))
+                    i += len(self._pool)
                 except EndOfDataException:
                     break
                 except Exception as ex:
@@ -59,9 +78,7 @@ class BudScraper(object):
             else:
                 logging.error("Error HTTP: %s", res.status)
 
-            i += 1
-            if i > 3:
-                break
+
 
     def _parse_page(self, page_data):
         page = bs.BeautifulSoup(page_data,
@@ -105,6 +122,6 @@ class BudScraper(object):
 
 if __name__ == "__main__":
     bud_scrap = BudScraper(search_keyword="tartak")
-    bud_scrap.fetch_data()
+    bud_scrap.fetch_data(20, 20)
     bud_scrap.export('test.csv')
 
